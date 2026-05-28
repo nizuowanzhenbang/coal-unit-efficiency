@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cue
+      POSTGRES_PASSWORD: cue_pass
+      POSTGRES_DB: coal_unit_efficiency
+    volumes:
+      - cue_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cue"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      CUE_DATABASE_URL: postgresql://cue:cue_pass@db:5432/coal_unit_efficiency
+      CUE_AUTO_SEED: "true"
+      CUE_SECRET_KEY: change-me-in-prod
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8012:8012"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5182:80"
+
+volumes:
+  cue_pgdata:
