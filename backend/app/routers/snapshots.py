@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -38,6 +40,9 @@ def create_snapshot(
     if unit is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="机组不存在")
     data = payload.model_dump(exclude_none=True)
+    if 'ts' in data:
+        ts = data['ts']
+        data['ts'] = ts.astimezone(timezone.utc) if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
     snap = OperatingSnapshot(**data)
     db.add(snap)
     db.commit()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..database import Base
@@ -84,6 +84,7 @@ class OptimizationSuggestion(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.0)   # 0~1
     model_version: Mapped[str] = mapped_column(String(32), default="")
     rationale: Mapped[str] = mapped_column(Text, default="")
+    evaluation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="PENDING")  # PENDING/ADOPTED/REJECTED
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -23,6 +23,7 @@ from .models.user import Role, User
 from .security import hash_password
 from .services import efficiency_engine, monitoring, reporting
 from .services.codes import next_code
+from .services.optimization_evidence import attach_input_evidence
 
 DEMO_USERS = [
     ("admin", "管理员", Role.ADMIN),
@@ -260,6 +261,7 @@ def _seed_optimization(db: Session, unit: CoalUnit) -> None:
         current_flue_temp=snap.flue_gas_temp,
         current_fly_ash_carbon=snap.fly_ash_carbon,
     )
+    attach_input_evidence(result, optimizer, unit, snap, settings.standard_coal_price)
     gen_kwh_day = snap.load_mw * 24.0 * 1000.0
     saving_t_day = result.predicted_coal_rate_drop * gen_kwh_day / 1_000_000.0
     db.add(
@@ -280,6 +282,7 @@ def _seed_optimization(db: Session, unit: CoalUnit) -> None:
             confidence=result.confidence,
             model_version=result.model_version,
             rationale=result.rationale,
+            evaluation={**result.evaluation, 'snapshot_id': snap.id, 'snapshot_ts': snap.ts.isoformat()},
             status="PENDING",
         )
     )

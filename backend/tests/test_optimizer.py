@@ -22,7 +22,7 @@ def test_recommend_without_history_uses_prior():
         load_mw=560, capacity_mw=600, current_o2=5.2, current_flue_temp=145, current_fly_ash_carbon=4.0
     )
     assert not opt.fitted
-    assert res.confidence == 0.6
+    assert res.confidence == 0.0  # 经验先验不伪装成已验证概率。
     # 当前氧量高于最优 → 有正向节煤空间
     assert res.predicted_coal_rate_drop > 0
     assert res.recommended_o2 < 5.2
@@ -38,16 +38,16 @@ def test_recommend_no_drop_when_already_optimal():
     assert res.predicted_coal_rate_drop == 0.0
 
 
-def test_fit_marks_fitted_with_enough_samples():
+def test_collinear_samples_do_not_qualify_even_when_count_is_sufficient():
     samples = [
         {"load_mw": 500 + i * 5, "flue_o2": 3.0 + i * 0.1, "flue_gas_temp": 120 + i,
          "fly_ash_carbon": 2.0 + i * 0.05, "net_coal_rate": 290 + i * 0.8}
-        for i in range(20)
+        for i in range(30)
     ]
     opt = CombustionOptimizer().fit(samples)
-    assert opt.fitted
+    assert not opt.fitted
     pred = opt.predict_coal_rate(560, 4.0, 130, 3.0)
-    assert pred is not None
+    assert pred is None
 
 
 def test_fit_skipped_with_few_samples():

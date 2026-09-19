@@ -234,6 +234,7 @@ class OptimizationOut(_ORM):
     confidence: float
     model_version: str
     rationale: str
+    evaluation: dict | None = None
     status: str
 
 
