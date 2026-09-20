@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import settings
@@ -32,3 +32,12 @@ def init_db() -> None:
     from . import models  # noqa: F401  确保所有表完成注册
 
     Base.metadata.create_all(bind=engine)
+    ensure_evaluation_column(engine)
+
+
+def ensure_evaluation_column(bind) -> None:
+    """无损补齐评估快照列；旧建议保持 NULL，不伪造历史评估。"""
+    with bind.begin() as conn:
+        columns = {c['name'] for c in inspect(conn).get_columns('optimization_suggestions')}
+        if 'evaluation' not in columns:
+            conn.execute(text('ALTER TABLE optimization_suggestions ADD COLUMN evaluation JSON'))

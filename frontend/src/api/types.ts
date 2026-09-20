@@ -52,6 +52,24 @@ export interface Deviation {
   severity: string;
 }
 
+export interface ModelEvaluation {
+  input_snapshot?: Record<string, number>;
+  input_sha256?: string;
+  mode: "PRIOR" | "REGRESSION";
+  reason: string;
+  valid_samples: number;
+  rejected_samples: number;
+  train_samples: number;
+  validation_samples: number;
+  validation_mae: number | null;
+  baseline_mae: number | null;
+  dataset_sha256: string | null;
+  feature_ranges?: Record<string, number[]>;
+  snapshot_id?: number;
+  history_start?: string | null;
+  history_end?: string | null;
+}
+
 export interface Optimization {
   id: number;
   unit_id: number;
@@ -69,6 +87,7 @@ export interface Optimization {
   confidence: number;
   model_version: string;
   rationale: string;
+  evaluation: ModelEvaluation | null;
   status: string;
 }
 

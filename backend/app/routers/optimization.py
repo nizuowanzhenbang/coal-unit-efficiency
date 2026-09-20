@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..algorithms.combustion_optimizer import CombustionOptimizer
@@ -18,29 +19,37 @@ from ..models.user import Role, User
 from ..schemas import OptimizationOut, OptimizationStatusUpdate, OptimizeRequest
 from ..services import efficiency_engine
 from ..services.codes import next_code
+from ..services.optimization_evidence import attach_input_evidence
 
 router = APIRouter(prefix="/optimization", tags=["AI燃烧优化"])
 _eng = require_roles(Role.ENERGY_ENG)
 
 
-def _history_samples(db: Session, unit_id: int, limit: int = 500) -> list[dict]:
+def _history_samples(db: Session, unit_id: int, before: datetime, limit: int = 500) -> list[dict]:
+    # 同一快照可重复计算；训练只取每个快照最新的一份结果。
+    latest = db.query(func.max(EfficiencyRecord.id).label('id')).filter(
+        EfficiencyRecord.unit_id == unit_id).group_by(EfficiencyRecord.snapshot_id).subquery()
     rows = (
         db.query(EfficiencyRecord, OperatingSnapshot)
         .join(OperatingSnapshot, EfficiencyRecord.snapshot_id == OperatingSnapshot.id)
-        .filter(EfficiencyRecord.unit_id == unit_id)
-        .order_by(EfficiencyRecord.ts.desc())
+        .join(latest, EfficiencyRecord.id == latest.c.id)
+        .filter(EfficiencyRecord.unit_id == unit_id, OperatingSnapshot.unit_id == unit_id,
+                OperatingSnapshot.ts < before)
+        .order_by(OperatingSnapshot.ts.desc(), OperatingSnapshot.id.desc())
         .limit(limit)
         .all()
     )
     return [
         {
+            "snapshot_id": s.id,
+            "ts": s.ts.isoformat(),
             "load_mw": s.load_mw,
             "flue_o2": s.flue_o2,
             "flue_gas_temp": s.flue_gas_temp,
             "fly_ash_carbon": s.fly_ash_carbon,
             "net_coal_rate": r.net_coal_rate,
         }
-        for r, s in rows
+        for r, s in reversed(rows)
     ]
 
 
@@ -67,15 +76,23 @@ def generate(payload: OptimizeRequest, db: Session = Depends(get_db), _: User = 
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该机组暂无工况数据")
 
     optimizer = CombustionOptimizer()
+    samples = []
     if payload.use_history:
-        optimizer.fit(_history_samples(db, unit.id))
-    result = optimizer.recommend(
-        load_mw=snap.load_mw,
-        capacity_mw=unit.capacity_mw,
-        current_o2=snap.flue_o2,
-        current_flue_temp=snap.flue_gas_temp,
-        current_fly_ash_carbon=snap.fly_ash_carbon,
-    )
+        samples = _history_samples(db, unit.id, snap.ts)
+        optimizer.fit(samples)
+    else:
+        optimizer.evaluation['reason'] = 'HISTORY_DISABLED'
+    try:
+        result = optimizer.recommend(load_mw=snap.load_mw, capacity_mw=unit.capacity_mw,
+            current_o2=snap.flue_o2, current_flue_temp=snap.flue_gas_temp,
+            current_fly_ash_carbon=snap.fly_ash_carbon)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    attach_input_evidence(result, optimizer, unit, snap, settings.standard_coal_price)
+    result.evaluation.update(snapshot_id=snap.id, snapshot_ts=snap.ts.isoformat(),
+        history_snapshot_ids=[s['snapshot_id'] for s in samples],
+        history_start=samples[0]['ts'] if samples else None,
+        history_end=samples[-1]['ts'] if samples else None)
 
     # 折算日省金额：日发电量 × 煤耗降幅 → 节标煤 → 金额
     gen_kwh_day = snap.load_mw * 24.0 * 1000.0
@@ -99,6 +116,7 @@ def generate(payload: OptimizeRequest, db: Session = Depends(get_db), _: User = 
         confidence=result.confidence,
         model_version=result.model_version,
         rationale=result.rationale,
+        evaluation=result.evaluation,
         status="PENDING",
     )
     db.add(suggestion)
