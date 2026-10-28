@@ -4,7 +4,7 @@ from decimal import Decimal
 from math import isfinite
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 
 def numeric_input(value):
@@ -17,6 +17,17 @@ def numeric_input(value):
 
 Number = Annotated[float, BeforeValidator(numeric_input), Field(allow_inf_nan=False)]
 Identity = Annotated[str, Field(min_length=1, max_length=128, pattern=r'^\S(?:.*\S)?$')]
+
+
+def representable_utc(value: datetime) -> datetime:
+    try:
+        value.astimezone(timezone.utc)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError('时间转换为UTC超出支持范围') from exc
+    return value
+
+
+SafeAwareDatetime = Annotated[AwareDatetime, AfterValidator(representable_utc)]
 
 
 class ContractModel(BaseModel):
@@ -32,7 +43,7 @@ class Measurement(ContractModel):
     basis: Literal['ar']
     unit: Literal['kcal/kg', 'kJ/kg']
     value: Annotated[Number, Field(gt=0, le=41868)]
-    measured_at: AwareDatetime
+    measured_at: SafeAwareDatetime
 
     @model_validator(mode='after')
     def heat_range(self):
@@ -45,12 +56,12 @@ class Allocation(ContractModel):
     source_instance: Identity
     batch_id: Identity
     unit_code: Identity
-    valid_from: AwareDatetime
-    valid_to: AwareDatetime
+    valid_from: SafeAwareDatetime
+    valid_to: SafeAwareDatetime
 
 
 class Conditions(ContractModel):
-    ts: AwareDatetime
+    ts: SafeAwareDatetime
     load_mw: Annotated[Number, Field(ge=1, le=2000)]
     main_steam_temp: Annotated[Number, Field(ge=0, le=1000)]
     main_steam_press: Annotated[Number, Field(gt=0, le=100)]
