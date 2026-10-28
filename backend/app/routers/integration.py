@@ -5,7 +5,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException, status
+import math
+from datetime import timezone
+
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from ..deps import require_roles
+from ..models.user import Role, User
+from ..models.unit import CoalUnit
+from ..models.operation import OperatingSnapshot
+from ..services.efficiency_engine import compute_record
+from ..services.coal_quality_adapter import CoalQualityPreview, adapt
 from pydantic import BaseModel
 
 from ..config import settings
@@ -43,3 +55,28 @@ def receive_coal_lhv(
 @router.get("/coal-lhv/{unit_code}")
 def get_cached_lhv(unit_code: str) -> dict:
     return {"unit_code": unit_code, "coal_lhv": _fuel_cache.get(unit_code)}
+
+
+@router.post('/coal-quality-preview')
+def preview_coal_quality(
+    payload: CoalQualityPreview,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(Role.OPERATOR, Role.ENERGY_ENG)),
+) -> dict:
+    """用户指定批次的情景估算，保留来源；不自动认定为实际入炉煤。"""
+    unit = db.query(CoalUnit).filter(CoalUnit.code == payload.allocation.unit_code).first()
+    if unit is None:
+        raise HTTPException(status_code=404, detail='关联机组不存在')
+    if payload.conditions.load_mw > unit.capacity_mw:
+        raise HTTPException(status_code=422, detail='情景负荷超过机组额定容量')
+    heat, lineage = adapt(payload)
+    data = payload.conditions.model_dump()
+    data['ts'] = data['ts'].astimezone(timezone.utc)
+    snapshot = OperatingSnapshot(unit_id=unit.id, coal_lhv=heat, **data)
+    record = compute_record(unit, snapshot)
+    efficiency = {column.name: getattr(record, column.name) for column in record.__table__.columns
+                  if column.name not in {'id', 'unit_id', 'snapshot_id', 'ts', 'created_at'}}
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in efficiency.values()):
+        raise HTTPException(status_code=422, detail='当前工况或机组参数无法形成有限计算结果')
+    return {'mode': 'scenario_preview', 'unit_code': unit.code, 'coal_lhv_kj_kg': heat,
+            'lineage': lineage, 'efficiency': efficiency}
