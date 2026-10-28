@@ -81,3 +81,24 @@ def test_target_and_roles_and_unknown_fields(client, unit_factory, eng_headers, 
     assert client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers).status_code == 404
     body['unexpected'] = 'not ignored'
     assert client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers).status_code == 422
+
+
+@pytest.mark.parametrize('section,key,value', [
+    (section, key, value)
+    for section, key in [('measurement', 'measured_at'), ('allocation', 'valid_from'),
+                         ('allocation', 'valid_to'), ('conditions', 'ts')]
+    for value in ['0001-01-01T00:00:00+08:00', '9999-12-31T23:59:59-08:00']
+])
+def test_unrepresentable_utc_is_rejected(client, unit_factory, eng_headers, section, key, value):
+    body = payload(unit_factory())
+    body[section][key] = value
+    response = client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers)
+    assert response.status_code == 422
+
+
+def test_normal_cross_day_offset_remains_valid(client, unit_factory, eng_headers):
+    body = payload(unit_factory())
+    body['measurement']['measured_at'] = '2026-10-27T20:00:00-04:00'
+    response = client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers)
+    assert response.status_code == 200
+    assert response.json()['lineage']['measured_at_utc'] == '2026-10-28T00:00:00Z'
