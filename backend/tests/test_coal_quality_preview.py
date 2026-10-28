@@ -94,6 +94,8 @@ def test_unrepresentable_utc_is_rejected(client, unit_factory, eng_headers, sect
     body[section][key] = value
     response = client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers)
     assert response.status_code == 422
+    errors = response.json()['detail']
+    assert any(error['loc'][-2:] == [section, key] and 'UTC超出支持范围' in error['msg'] for error in errors)
 
 
 def test_normal_cross_day_offset_remains_valid(client, unit_factory, eng_headers):
@@ -102,3 +104,19 @@ def test_normal_cross_day_offset_remains_valid(client, unit_factory, eng_headers
     response = client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers)
     assert response.status_code == 200
     assert response.json()['lineage']['measured_at_utc'] == '2026-10-28T00:00:00Z'
+
+
+@pytest.mark.parametrize('measured, start, snapshot, end', [
+    ('0001-01-01T08:00:00+08:00', '0001-01-01T00:00:00Z', '0001-01-01T08:00:00+08:00', '0001-01-01T00:00:01Z'),
+    ('9999-12-31T15:59:57-08:00', '9999-12-31T23:59:57Z', '9999-12-31T15:59:58-08:00', '9999-12-31T23:59:59Z'),
+])
+def test_representable_utc_extremes_and_inclusive_start(client, unit_factory, eng_headers, measured, start, snapshot, end):
+    body = payload(unit_factory())
+    body['measurement']['measured_at'] = measured
+    body['allocation'].update(valid_from=start, valid_to=end)
+    body['conditions']['ts'] = snapshot
+    response = client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers)
+    assert response.status_code == 200, response.text
+    body['conditions']['ts'] = end
+    response = client.post('/api/integration/coal-quality-preview', json=body, headers=eng_headers)
+    assert response.status_code == 422
