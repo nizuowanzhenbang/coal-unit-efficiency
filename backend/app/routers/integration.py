@@ -180,14 +180,18 @@ def create_coal_allocation(
 def list_coal_allocations(
     source_instance: Annotated[Identity, BeforeValidator(sanitize_nonfinite), Query()],
     batch_id: Annotated[Identity, BeforeValidator(sanitize_nonfinite), Query()],
+    before_id: Annotated[int | None, Query(ge=1, le=9223372036854775807)] = None,
     db: Session = Depends(get_db), _: User = Depends(get_current_user),
 ) -> dict:
     if '\x00' in source_instance or '\x00' in batch_id:
         raise HTTPException(status_code=422, detail='来源标识不能包含零字符')
-    rows = (db.query(CoalScenarioAllocation)
-            .filter_by(source_instance=source_instance, batch_id=batch_id)
-            .order_by(CoalScenarioAllocation.id.desc()).limit(101).all())
-    return {'items': [allocation_dict(row) for row in rows[:100]], 'truncated': len(rows) > 100}
+    query = db.query(CoalScenarioAllocation).filter_by(source_instance=source_instance, batch_id=batch_id)
+    if before_id is not None:
+        query = query.filter(CoalScenarioAllocation.id < before_id)
+    rows = query.order_by(CoalScenarioAllocation.id.desc()).limit(101).all()
+    truncated = len(rows) > 100
+    return {'items': [allocation_dict(row) for row in rows[:100]], 'truncated': truncated,
+            'next_before_id': rows[99].id if truncated else None}
 
 
 @router.get('/coal-quality-allocations/{allocation_id}')

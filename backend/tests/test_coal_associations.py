@@ -175,3 +175,15 @@ def test_lookup_reports_truncation_without_choosing_an_allocation(client, db, un
     assert len(result['items']) == 100
     assert result['items'][0]['evidence'] == '情景 100'
     assert all(item['evidence'] != '情景 0' for item in result['items'])
+    next_cursor = result['next_before_id']
+    page = client.get('/api/integration/coal-quality-allocations',
+                      params={'source_instance': 'plant-a', 'batch_id': '1', 'before_id': next_cursor},
+                      headers=eng_headers)
+    assert page.status_code == 200
+    assert [item['evidence'] for item in page.json()['items']] == ['情景 0']
+    assert page.json()['truncated'] is False
+    assert page.json()['next_before_id'] is None
+    exact = client.get('/api/integration/coal-quality-allocations',
+                       params={'source_instance': 'plant-a', 'batch_id': '1', 'before_id': result['items'][0]['id']},
+                       headers=eng_headers)
+    assert len(exact.json()['items']) == 100 and exact.json()['truncated'] is False
