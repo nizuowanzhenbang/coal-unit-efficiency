@@ -91,10 +91,14 @@ def sanitize_nonfinite(value):
     # 保证无效输入的422详情可以编码，且不把无穷数字当成有效声明。
     if isinstance(value, float) and not math.isfinite(value):
         return None
+    if isinstance(value, str) and any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+        return None
     if isinstance(value, list):
         return [sanitize_nonfinite(item) for item in value]
     if isinstance(value, dict):
-        return {key: sanitize_nonfinite(item) for key, item in value.items()}
+        return {(key if not any(0xD800 <= ord(char) <= 0xDFFF for char in key)
+                 else '__invalid_unicode_key__'): sanitize_nonfinite(item)
+                for key, item in value.items()}
     return value
 
 
@@ -102,16 +106,18 @@ class AllocationCreate(ContractModel):
     request_id: UUID
     source_instance: Identity
     batch_id: Identity
-    unit_code: Annotated[str, Field(min_length=1, max_length=16)]
+    unit_code: Annotated[Identity, Field(max_length=16)]
     valid_from: SafeAwareDatetime
     valid_to: SafeAwareDatetime
     evidence: Annotated[str, Field(min_length=1, max_length=500)]
 
-    @field_validator('evidence')
+    @field_validator('source_instance', 'batch_id', 'unit_code', 'evidence')
     @classmethod
-    def meaningful_evidence(cls, value):
+    def storable_text(cls, value):
+        if '\x00' in value:
+            raise ValueError('文本不能包含零字符')
         if not value.strip():
-            raise ValueError('请说明情景关联依据')
+            raise ValueError('文本不能为空')
         return value
 
     @model_validator(mode='after')

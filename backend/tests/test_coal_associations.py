@@ -78,3 +78,67 @@ def test_invalid_nonfinite_json_and_huge_identifier_return_422(client, unit_fact
     assert response.status_code == 422
     assert client.get('/api/integration/coal-quality-allocations/9999999999999999999999999',
                       headers=eng_headers).status_code == 422
+
+
+def test_invalid_storage_strings_and_unusable_unit_code_rejected(client, unit_factory, eng_headers):
+    unit = unit_factory(code='U-01')
+    spaced = unit_factory(code=' U-02 ')
+    path = '/api/integration/coal-quality-allocations'
+    for key in ('source_instance', 'batch_id', 'unit_code', 'evidence'):
+        body = declaration(unit, unit_code='U-01')
+        body[key] = 'bad\u0000value'
+        response = client.post(path, json=body, headers=eng_headers)
+        assert response.status_code == 422, (key, response.text)
+    response = client.post(path, json=declaration(spaced), headers=eng_headers)
+    assert response.status_code == 422
+
+
+def test_unpaired_surrogates_are_rejected_with_serializable_errors(client, unit_factory, eng_headers):
+    import json
+    unit = unit_factory()
+    path = '/api/integration/coal-quality-allocations'
+    for key in ('source_instance', 'batch_id', 'unit_code', 'evidence'):
+        body = declaration(unit)
+        body[key] = '\ud800'
+        body['valid_to'] = 'bogus'
+        response = client.post(path, content=json.dumps(body), headers={**eng_headers, 'Content-Type': 'application/json'})
+        assert response.status_code == 422
+        assert response.json()['detail']
+    body = declaration(unit)
+    body['\ud800'] = {'nested': ['\ud800']}
+    response = client.post(path, content=json.dumps(body), headers={**eng_headers, 'Content-Type': 'application/json'})
+    assert response.status_code == 422
+    assert response.json()['detail']
+
+
+def test_concurrent_same_request_creates_one_record(client, unit_factory, eng_headers):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    unit = unit_factory()
+    body = declaration(unit)
+    start = Barrier(2)
+    def send():
+        start.wait(timeout=10)
+        return client.post('/api/integration/coal-quality-allocations', json=body, headers=eng_headers)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: send(), range(2)))
+    assert sorted(item.status_code for item in results) == [200, 201]
+    assert results[0].json()['id'] == results[1].json()['id']
+
+
+def test_concurrent_conflicting_request_preserves_one_declaration(client, unit_factory, eng_headers):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    unit = unit_factory()
+    first = declaration(unit)
+    second = dict(first, evidence='另一份模拟依据')
+    start = Barrier(2)
+    def send(body):
+        start.wait(timeout=10)
+        return client.post('/api/integration/coal-quality-allocations', json=body, headers=eng_headers)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(send, (first, second)))
+    assert sorted(item.status_code for item in results) == [201, 409]
+    winner = next(item.json() for item in results if item.status_code == 201)
+    read = client.get(f"/api/integration/coal-quality-allocations/{winner['id']}", headers=eng_headers)
+    assert read.json()['evidence'] == winner['evidence']
