@@ -20,3 +20,4 @@ __all__ = [
     "Role",
     "User",
 ]
+from .coal_measurement import CoalMeasurementEvidence

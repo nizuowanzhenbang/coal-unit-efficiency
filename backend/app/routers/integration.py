@@ -225,3 +225,65 @@ def preview_saved_allocation(
     result = preview_coal_quality(combined, db=db, _=user)
     result['association_id'] = row.id
     return result
+
+
+from ..models.coal_measurement import CoalMeasurementEvidence
+from ..services.coal_time_evidence import MeasurementCreate, evidence_dict
+
+
+@router.post('/coal-quality-measurements', status_code=201)
+def save_measurement(
+    payload: Annotated[MeasurementCreate, BeforeValidator(sanitize_nonfinite)], response: Response,
+    db: Session = Depends(get_db), user: User = Depends(require_roles(Role.OPERATOR, Role.ENERGY_ENG)),
+) -> dict:
+    content, digest = payload.content()
+    data = {'request_id': str(payload.request_id), 'content_json': content,
+            'content_sha256': digest, 'created_by': user.username}
+    existing = db.query(CoalMeasurementEvidence).filter_by(request_id=data['request_id']).first()
+    if existing:
+        if not same_request(existing, data):
+            raise HTTPException(status_code=409, detail='请求标识已用于不同测量声明')
+        response.status_code = 200
+        return evidence_dict(existing)
+    row = CoalMeasurementEvidence(**data, created_at=utc_text(datetime.now(timezone.utc)))
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        existing = db.query(CoalMeasurementEvidence).filter_by(request_id=data['request_id']).first()
+        if existing and same_request(existing, data):
+            response.status_code = 200
+            return evidence_dict(existing)
+        raise HTTPException(status_code=409, detail='测量声明请求冲突') from exc
+    db.refresh(row)
+    return evidence_dict(row)
+
+
+@router.get('/coal-quality-measurements/{measurement_id}')
+def read_measurement(
+    measurement_id: Annotated[int, Path(ge=1, le=9223372036854775807)],
+    db: Session = Depends(get_db), _: User = Depends(get_current_user),
+) -> dict:
+    row = db.get(CoalMeasurementEvidence, measurement_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail='测量依据不存在')
+    return evidence_dict(row)
+
+
+class EvidencedPreview(ContractModel):
+    measurement_id: Annotated[int, Field(ge=1, le=9223372036854775807)]
+    allocation_id: Annotated[int, Field(ge=1, le=9223372036854775807)]
+    conditions: Conditions
+
+
+@router.post('/coal-quality-preview/evidenced')
+def preview_evidenced(
+    payload: Annotated[EvidencedPreview, BeforeValidator(sanitize_nonfinite)],
+    db: Session = Depends(get_db), user: User = Depends(require_roles(Role.OPERATOR, Role.ENERGY_ENG)),
+) -> dict:
+    saved = read_measurement(payload.measurement_id, db=db, _=user)
+    result = preview_saved_allocation(SavedPreview(allocation_id=payload.allocation_id,
+                                      measurement=saved['measurement'], conditions=payload.conditions), db=db, user=user)
+    result['measurement_evidence'] = saved
+    return result

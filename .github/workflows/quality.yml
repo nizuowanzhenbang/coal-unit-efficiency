@@ -71,4 +71,4 @@ jobs:
         run: python -m pip install -r backend/requirements.txt
       - name: Scenario association PostgreSQL regression
         working-directory: backend
-        run: python -m pytest tests/test_coal_associations.py -q -o addopts=''
+        run: python -m pytest tests/test_coal_associations.py tests/test_coal_time_evidence.py -q -o addopts=''
