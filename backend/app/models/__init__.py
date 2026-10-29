@@ -1,5 +1,6 @@
 """ORM 模型聚合导出，导入本包即完成全部表注册。"""
 
+from .coal_association import CoalScenarioAllocation
 from .alert import Alert
 from .analysis import BenchmarkTarget, DeviationAnalysis, OptimizationSuggestion
 from .operation import EfficiencyRecord, OperatingSnapshot
