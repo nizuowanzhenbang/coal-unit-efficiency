@@ -28,7 +28,7 @@ class MeasurementCreate(ContractModel):
     @model_validator(mode='after')
     def coherent(self):
         for value in [self.measurement.source_instance, self.measurement.batch_id,
-                      self.measurement.test_id, self.time_provenance.evidence]:
+                      self.measurement.test_id, self.time_provenance.evidence, self.time_provenance.stored_time]:
             if '\x00' in value or any(0xD800 <= ord(c) <= 0xDFFF for c in value):
                 raise ValueError('文本包含不可存储字符')
         p, m = self.time_provenance, self.measurement

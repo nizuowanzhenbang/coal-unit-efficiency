@@ -40,7 +40,7 @@ def test_save_read_replay_conflict_and_roles(client, db, unit_factory, eng_heade
 
 @pytest.mark.parametrize('key,value', [('offset_minutes', 0), ('offset_minutes', True),
     ('offset_minutes', 841), ('stored_time', '2026-10-28T00:00:00'),
-    ('stored_time', '2026-10-28T08:00:00+08:00'), ('stored_time', 'bad'),
+    ('stored_time', '2026-10-28T08:00:00+08:00'), ('stored_time', 'bad'), ('stored_time', '2026-10-28\x0008:00:00'),
     ('evidence', ' '), ('evidence', 'a\x00b'), ('kind', 'verified')])
 def test_invalid_provenance(client, unit_factory, eng_headers, key, value):
     body = evidence(unit_factory())
@@ -81,3 +81,33 @@ def test_concurrent_evidence_replay(client, unit_factory, eng_headers):
         results = list(pool.map(send, range(2)))
     assert sorted(r.status_code for r in results) == [200, 201]
     assert results[0].json() == results[1].json()
+
+
+def test_same_instant_different_offset_and_invalid_unicode_rejected(client, unit_factory, eng_headers):
+    import json
+    body = evidence(unit_factory())
+    body['measurement']['measured_at'] = '2026-10-28T00:00:00Z'
+    assert client.post(PATH, json=body, headers=eng_headers).status_code == 422
+    for section, key in [('measurement', 'test_id'), ('time_provenance', 'stored_time'), ('time_provenance', 'evidence')]:
+        bad = deepcopy(body)
+        bad[section][key] = '\ud800'
+        response = client.post(PATH, content=json.dumps(bad), headers={**eng_headers, 'Content-Type': 'application/json'})
+        assert response.status_code == 422
+        assert response.json()['detail']
+
+
+def test_concurrent_conflicting_evidence(client, unit_factory, eng_headers):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    body = evidence(unit_factory())
+    changed = deepcopy(body)
+    changed['measurement']['value'] = 3999
+    barrier = Barrier(2)
+    def send(value):
+        barrier.wait(timeout=10)
+        return client.post(PATH, json=value, headers=eng_headers)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(send, (body, changed)))
+    assert sorted(r.status_code for r in results) == [201, 409]
+    winner = next(r.json() for r in results if r.status_code == 201)
+    assert client.get(f"{PATH}/{winner['id']}", headers=eng_headers).json() == winner
