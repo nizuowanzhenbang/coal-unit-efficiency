@@ -142,3 +142,36 @@ def test_concurrent_conflicting_request_preserves_one_declaration(client, unit_f
     winner = next(item.json() for item in results if item.status_code == 201)
     read = client.get(f"/api/integration/coal-quality-allocations/{winner['id']}", headers=eng_headers)
     assert read.json()['evidence'] == winner['evidence']
+
+
+def test_find_saved_associations_by_full_source_identity(client, unit_factory, eng_headers, viewer_headers):
+    unit = unit_factory()
+    path = '/api/integration/coal-quality-allocations'
+    a = client.post(path, json=declaration(unit), headers=eng_headers).json()
+    b = client.post(path, json=declaration(unit, source_instance='plant-b'), headers=eng_headers).json()
+    response = client.get(path, params={'source_instance': 'plant-a', 'batch_id': '1'}, headers=viewer_headers)
+    assert response.status_code == 200
+    assert [item['id'] for item in response.json()['items']] == [a['id']]
+    assert response.json()['truncated'] is False
+    response = client.get(path, params={'source_instance': 'plant-b', 'batch_id': '1'}, headers=viewer_headers)
+    assert [item['id'] for item in response.json()['items']] == [b['id']]
+    assert client.get(path, params={'batch_id': '1'}, headers=viewer_headers).status_code == 422
+    assert client.get(path, params={'source_instance': 'plant-a', 'batch_id': '\x00'}, headers=viewer_headers).status_code == 422
+
+
+def test_lookup_reports_truncation_without_choosing_an_allocation(client, db, unit_factory, eng_headers):
+    from app.models.coal_association import CoalScenarioAllocation
+    unit = unit_factory()
+    for n in range(101):
+        db.add(CoalScenarioAllocation(request_id=str(uuid4()), source_instance='plant-a', batch_id='1',
+               unit_code=unit.code, valid_from='2026-10-28T00:00:00Z', valid_to='2026-10-29T00:00:00Z',
+               evidence=f'情景 {n}', created_by='test', created_at='2026-10-28T00:00:00Z'))
+    db.commit()
+    response = client.get('/api/integration/coal-quality-allocations',
+                          params={'source_instance': 'plant-a', 'batch_id': '1'}, headers=eng_headers)
+    assert response.status_code == 200
+    result = response.json()
+    assert result['truncated'] is True
+    assert len(result['items']) == 100
+    assert result['items'][0]['evidence'] == '情景 100'
+    assert all(item['evidence'] != '情景 0' for item in result['items'])

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -174,6 +174,20 @@ def create_coal_allocation(
         raise HTTPException(status_code=409, detail='情景声明请求冲突') from exc
     db.refresh(row)
     return allocation_dict(row)
+
+
+@router.get('/coal-quality-allocations')
+def list_coal_allocations(
+    source_instance: Annotated[Identity, BeforeValidator(sanitize_nonfinite), Query()],
+    batch_id: Annotated[Identity, BeforeValidator(sanitize_nonfinite), Query()],
+    db: Session = Depends(get_db), _: User = Depends(get_current_user),
+) -> dict:
+    if '\x00' in source_instance or '\x00' in batch_id:
+        raise HTTPException(status_code=422, detail='来源标识不能包含零字符')
+    rows = (db.query(CoalScenarioAllocation)
+            .filter_by(source_instance=source_instance, batch_id=batch_id)
+            .order_by(CoalScenarioAllocation.id.desc()).limit(101).all())
+    return {'items': [allocation_dict(row) for row in rows[:100]], 'truncated': len(rows) > 100}
 
 
 @router.get('/coal-quality-allocations/{allocation_id}')
